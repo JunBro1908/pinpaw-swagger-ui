@@ -1,1016 +1,207 @@
 openapi: 3.0.3
 info:
-  title: PinPaw API
-  version: 0.1.0
-  description: |
-    PinPaw API Contract (BFF 기준).
-    - Anonymous: 제보 생성만 허용
-    - Auth required: 제보 조회/탐색/상세 및 보호자 기능(/my, /recommend)은 인증된 유저만 허용
-    - /map: cache + 조건부 폴링 + since 기반 델타 업데이트를 고려한 설계
-    - /recommend: 요청 시 계산 + 서버 캐싱(recommendation_cache) + 클라이언트 캐시를 고려한 설계
-    - Trail: 보호자가 '체크'로 제보를 선택하면, 선택된 제보만 지도에 표시하고(sightings?trailOnly),
-             선택된 제보들을 시간(sightedAt) 순으로 선(polyline) 연결해 보여준다.
-
+  title: PinPaw BFF API
+  version: 1.1.0
+  description: PinPaw Service API for Next.js BFF
 servers:
-  - url: https://www.pinpaw.co.kr
-
-tags:
-  - name: Sightings
-    description: 목격 제보(Sighting)
-  - name: Lost
-    description: 유실 등록(Lost)
-  - name: Recommendations
-    description: 추천(Recommendation)
-  - name: Admin
-    description: 관리자/마스터 권한 기능
+  - url: https://api.pinpaw.com/v1
+security:
+  - BearerAuth: []
 
 paths:
-  /api/sightings:
+  /sightings/upload-url:
     post:
-      tags: [Sightings]
-      summary: 목격 제보 생성 (익명 허용)
-      description: |
-        비회원(익명)도 제보 생성 가능.
-        중복 제출 방지를 위해 requestId(idempotency key)를 권장.
-        서버(BFF)에서 업로드/검증/레이트리밋을 수행한다.
-      requestBody:
-        required: true
-        content:
-          multipart/form-data:
-            schema:
-              $ref: "#/components/schemas/CreateSightingRequest"
-      responses:
-        "201":
-          description: Created
-          headers:
-            Location:
-              schema:
-                type: string
-              description: Created resource location
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/CreateSightingResponse"
-        "400":
-          description: Bad Request
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ErrorResponse" }
-        "429":
-          description: Too Many Requests (rate limited)
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ErrorResponse" }
-
-    get:
-      tags: [Sightings]
-      summary: 지도 탐색용 제보 리스트 조회 (인증 필요)
-      description: |
-        /map에서 bounds + filters 기반 목록 조회.
-        인증된 유저만 접근 가능.
-        since 파라미터로 델타 갱신 가능(updated_at > since).
-        trailOnly=true면 해당 lostId의 trail에 포함된 제보만 반환한다.
-      security:
-        - bearerAuth: []
-      parameters:
-        - in: query
-          name: bounds
-          required: true
-          schema:
-            type: string
-          description: "swLat, swLng, neLat, neLng"
-          example: "37.10, 127.10, 37.20, 127.20"
-
-        - in: query
-          name: zoom
-          required: false
-          schema:
-            type: integer
-            minimum: 0
-          description: "클라이언트 LOD/클러스터링 버킷 결정을 위한 힌트"
-
-        - in: query
-          name: species
-          required: false
-          schema:
-            type: string
-          example: dog
-
-        - in: query
-          name: breed
-          required: false
-          schema:
-            type: string
-
-        - in: query
-          name: color
-          required: false
-          schema:
-            type: string
-
-        - in: query
-          name: tags
-          required: false
-          schema:
-            type: string
-          description: "comma-separated tags"
-          example: "shy"
-
-        - in: query
-          name: timeRange
-          required: false
-          schema:
-            type: string
-            enum: [3h, 5h, 8h, 12h, 18h, 24h, 1d, 2d, 3d, 7d, 14d, 28d]
-          example: 24h
-
-        - in: query
-          name: onlyFresh
-          required: false
-          schema:
-            type: boolean
-          description: "true면 timeRange가 없을 때 서버/클라이언트 정책으로 기본 범위를 적용할 수 있음"
-
-        - in: query
-          name: since
-          required: false
-          schema:
-            type: string
-            format: date-time
-          description: "Delta update: updated_at > since (ISO datetime)"
-
-        - in: query
-          name: limit
-          required: false
-          schema:
-            type: integer
-            default: 200
-            minimum: 1
-            maximum: 1000
-
-        - in: query
-          name: trailOnly
-          required: false
-          schema:
-            type: boolean
-            default: false
-          description: "true면 trail에 포함된 제보만 반환"
-
-        - in: query
-          name: lostId
-          required: false
-          schema:
-            type: string
-          description: |
-            trailOnly=true일 때 필수.
-            어떤 유실 건의 trail을 보여줄지 지정한다.
-          example: lp_001
-
-      responses:
-        "200":
-          description: OK
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ListSightingsResponse"
-        "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ErrorResponse" }
-        "422":
-          description: Unprocessable Entity (e.g., trailOnly=true but lostId missing)
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ErrorResponse" }
-
-  /api/sightings/{id}:
-    get:
-      tags: [Sightings]
-      summary: 제보 상세 조회 (인증 필요)
-      description: |
-        지도에서 마커/리스트 선택 후 상세 드로어/상세 페이지에서 사용.
-        인증된 유저만 접근 가능.
-        UI에서 '하트' 토글(선택/해제)을 제공할 수 있다(별도 trail API).
-      security:
-        - bearerAuth: []
-      parameters:
-        - in: path
-          name: id
-          required: true
-          schema:
-            type: string
-          example: st_123
-      responses:
-        "200":
-          description: OK
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/SightingDetailResponse"
-        "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ErrorResponse" }
-        "404":
-          description: Not Found
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ErrorResponse" }
-
-    delete:
-      tags: [Admin, Sightings]
-      summary: 제보 삭제 (마스터 권한만)
-      description: |
-        운영/관리 목적의 제보 삭제.
-        마스터 권한을 가진 개발자(관리자)만 수행 가능.
-      security:
-        - bearerAuth: []
-      parameters:
-        - in: path
-          name: id
-          required: true
-          schema: { type: string }
-          example: st_123
-      responses:
-        "204":
-          description: No Content
-        "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ErrorResponse" }
-        "403":
-          description: Forbidden (not master)
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ErrorResponse" }
-        "404":
-          description: Not Found
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ErrorResponse" }
-
-  /api/lost:
-    get:
-      tags: [Lost]
-      summary: 내 유실 목록 조회 (인증 필요)
-      description: |
-        /my에서 내 유실 등록 목록 조회.
-        /recommend에서 lost 선택 셀렉터로도 사용 가능.
-      security:
-        - bearerAuth: []
-      responses:
-        "200":
-          description: OK
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ListLostResponse" }
-        "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ErrorResponse" }
-
-    post:
-      tags: [Lost]
-      summary: 유실 등록 생성 (인증 필요)
-      security:
-        - bearerAuth: []
+      operationId: createUploadUrl
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/CreateLostRequest"
+              type: object
+              required: [filename, fileType, fileSize]
+              properties:
+                filename: { type: string }
+                fileType: { type: string }
+                fileSize: { type: integer, maximum: 10485760 }
       responses:
-        "201":
-          description: Created
+        '200':
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/LostResponse" }
-        "400":
-          description: Bad Request
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ErrorResponse" }
-        "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ErrorResponse" }
+              schema:
+                type: object
+                properties:
+                  uploadUrl: { type: string }
+                  imageUuid: { type: string }
 
-  /api/lost/{id}:
-    get:
-      tags: [Lost]
-      summary: 내 유실 상세 조회 (인증 필요)
-      description: |
-        /my 상세/편집 화면용. (owner only)
-      security:
-        - bearerAuth: []
+  /sightings:
+    post:
+      operationId: createSighting
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SightingCreateRequest'
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SightingResponse'
+
+  /sightings/{id}:
+    delete:
+      operationId: deleteSighting
       parameters:
-        - in: path
-          name: id
+        - name: id
+          in: path
           required: true
-          schema: { type: string }
-          example: lp_001
+          schema: { type: string, format: uuid }
       responses:
-        "200":
-          description: OK
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/LostResponse" }
-        "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ErrorResponse" }
-        "404":
-          description: Not Found
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ErrorResponse" }
-
+        '204':
+          description: No Content
     patch:
-      tags: [Lost]
-      summary: 유실 등록 상태/정보 수정 (인증 필요, 본인만)
-      description: |
-        유실 상태 변경(찾는중/searching, 찾음/found) 및 일부 필드 수정.
-        owner only.
-      security:
-        - bearerAuth: []
+      operationId: updateSightingStatus
       parameters:
-        - in: path
-          name: id
+        - name: id
+          in: path
           required: true
-          schema: { type: string }
-          example: lp_001
+          schema: { type: string, format: uuid }
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/UpdateLostRequest" }
+            schema:
+              type: object
+              properties:
+                status:
+                  type: string
+                  enum: [open, matched, closed]
       responses:
-        "200":
-          description: OK
+        '200':
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/LostResponse" }
-        "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ErrorResponse" }
-        "403":
-          description: Forbidden (not owner)
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ErrorResponse" }
-        "404":
-          description: Not Found
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ErrorResponse" }
+              schema:
+                $ref: '#/components/schemas/SightingResponse'
 
-    delete:
-      tags: [Lost]
-      summary: 유실 등록 삭제 (인증 필요, 본인만)
-      description: |
-        등록한 본인만 삭제 가능.
-        (연관 trail/recommendation_cache 등은 서버 정책에 따라 함께 정리)
-      security:
-        - bearerAuth: []
-      parameters:
-        - in: path
-          name: id
-          required: true
-          schema: { type: string }
-          example: lp_001
-      responses:
-        "204":
-          description: No Content
-        "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ErrorResponse" }
-        "403":
-          description: Forbidden (not owner)
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ErrorResponse" }
-        "404":
-          description: Not Found
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ErrorResponse" }
-
-  /api/recommendations:
+  /map/markers:
     get:
-      tags: [Recommendations]
-      summary: 유사도 추천 조회 (인증 필요)
-      description: |
-        /recommend에서 사용.
-        서버는 recommendation_cache(lost_id) 를 먼저 조회하고,
-        cache가 stale/miss 이면 후보군 축소(timeRange/거리) 후 pgvector 유사도 검색 + re-rank를 수행한 뒤 캐시를 갱신한다.
-      security:
-        - bearerAuth: []
+      operationId: getMapMarkers
       parameters:
-        - in: query
-          name: lostId
+        - name: bbox
+          in: query
           required: true
-          schema:
-            type: string
-          example: lp_001
-
-        - in: query
-          name: timeRange
-          required: false
-          schema:
-            type: string
-            enum: [24h, 7d, 30d]
-          example: 7d
-          description: "추천 후보군을 시간 기준으로 축소"
-
-        - in: query
-          name: radiusKm
-          required: false
-          schema:
-            type: number
-            default: 10
-            minimum: 1
-            maximum: 200
-          description: "유실 위치 기반 후보군 거리 제한(km)"
-
-        - in: query
-          name: limit
-          required: false
-          schema:
-            type: integer
-            default: 50
-            minimum: 1
-            maximum: 200
-
-        - in: query
-          name: cursor
-          required: false
-          schema:
-            type: string
-          description: "페이지네이션"
-
+          schema: { type: string }
+        - name: If-None-Match
+          in: header
+          schema: { type: string }
       responses:
-        "200":
-          description: OK
+        '200':
+          headers:
+            ETag: { schema: { type: string } }
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/RecommendationsResponse" }
-        "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ErrorResponse" }
+              schema:
+                type: object
+                properties:
+                  markers:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/MapMarker'
+        '304':
+          description: Not Modified
 
-  /api/lost/{id}/trail:
+  /recommend:
     get:
-      tags: [Lost]
-      summary: 유실 건의 Trail 조회 (인증 필요)
-      description: |
-        보호자가 체크로 선택한 제보들의 목록(trail)을 조회한다.
-        서버는 sightedAt 기준으로 정렬된 items를 반환하여,
-        프론트는 반환 순서대로 polyline을 연결하면 된다.
-      security:
-        - bearerAuth: []
+      operationId: getRecommendations
       parameters:
-        - in: path
-          name: id
+        - name: lostPostId
+          in: query
           required: true
-          schema: { type: string }
-          example: lp_001
+          schema: { type: string, format: uuid }
       responses:
-        "200":
-          description: OK
+        '200':
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/TrailResponse" }
-        "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ErrorResponse" }
-        "404":
-          description: Not Found (no trail yet)
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ErrorResponse" }
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/RecommendationResult'
 
-    put:
-      tags: [Lost]
-      summary: 유실 건의 Trail 저장/갱신 (인증 필요)
-      description: |
-        (옵션) trail을 한 번에 통째로 덮어쓰는 방식.
-        일괄 저장이 필요하면 이 엔드포인트를 사용한다.
-      security:
-        - bearerAuth: []
-      parameters:
-        - in: path
-          name: id
-          required: true
-          schema: { type: string }
-          example: lp_001
+  /recommend/feedback:
+    post:
+      operationId: submitRecommendationFeedback
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/UpsertTrailRequest" }
+            schema:
+              type: object
+              required: [lostPostId, sightingId, type]
+              properties:
+                lostPostId: { type: string, format: uuid }
+                sightingId: { type: string, format: uuid }
+                type: { type: string, enum: [positive, negative] }
+                reason: { type: string }
       responses:
-        "200":
-          description: OK
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/TrailResponse" }
-        "400":
-          description: Bad Request
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ErrorResponse" }
-        "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ErrorResponse" }
-
-  /api/lost/{id}/trail/items/{sightingId}:
-    put:
-      tags: [Lost]
-      summary: Trail 체크(선택) 토글/추가 (인증 필요)
-      description: |
-        상세 화면에서 '체크'를 누를 때 호출.
-        서버는 trail에 sightingId를 추가하고, trail은 sightedAt 기준 정렬 상태로 유지된다.
-        이미 존재한다면 멱등 처리(그대로 유지)하거나, toggle=true 정책을 쓰면 토글로 동작시킬 수 있다.
-      security:
-        - bearerAuth: []
-      parameters:
-        - in: path
-          name: id
-          required: true
-          schema: { type: string }
-          example: lp_001
-        - in: path
-          name: sightingId
-          required: true
-          schema: { type: string }
-          example: st_123
-        - in: query
-          name: toggle
-          required: false
-          schema:
-            type: boolean
-            default: true
-          description: |
-            true면 '있으면 삭제/없으면 추가' 토글로 동작.
-            false면 '추가 only(멱등)'.
-      responses:
-        "200":
-          description: OK
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/TrailMutationResponse" }
-        "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ErrorResponse" }
-        "403":
-          description: Forbidden (not owner of lost)
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ErrorResponse" }
-
-    delete:
-      tags: [Lost]
-      summary: Trail 체크(선택) 해제 (인증 필요)
-      description: |
-        상세 화면에서 체크를 해제할 때 명시적으로 제거.
-      security:
-        - bearerAuth: []
-      parameters:
-        - in: path
-          name: id
-          required: true
-          schema: { type: string }
-          example: lp_001
-        - in: path
-          name: sightingId
-          required: true
-          schema: { type: string }
-          example: st_123
-      responses:
-        "200":
-          description: OK
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/TrailMutationResponse" }
-        "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ErrorResponse" }
-        "403":
-          description: Forbidden (not owner of lost)
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        '201':
+          description: Created
 
 components:
   securitySchemes:
-    bearerAuth:
+    BearerAuth:
       type: http
       scheme: bearer
       bearerFormat: JWT
 
   schemas:
-    ErrorResponse:
+    SightingCreateRequest:
       type: object
+      required: [imageUuid, latitude, longitude, description, discoveredAt]
       properties:
-        error:
-          type: string
-          example: Unauthorized
-        message:
-          type: string
-          nullable: true
-          example: "JWT is missing or invalid"
+        imageUuid: { type: string, format: uuid }
+        latitude: { type: number }
+        longitude: { type: number }
+        discoveredAt: { type: string, format: date-time }
+        description: { type: string }
+        breed: { type: string }
+        color: { type: string }
+        wearing: { type: array, items: { type: string } }
 
-    CreateSightingRequest:
+    SightingResponse:
       type: object
-      required: [requestId, photo, lat, lng, sightedAt]
       properties:
-        requestId:
-          type: string
-          description: Idempotency key (uuid)
-          example: "6c4d8af8-2f5b-4c48-8b8a-1f3d5b7c9a01"
-        photo:
-          type: string
-          format: binary
-        lat:
-          type: number
-          format: double
-          example: 37.123
-        lng:
-          type: number
-          format: double
-          example: 127.123
-        sightedAt:
-          type: string
-          format: date-time
-          example: "2025-12-13T07:10:00Z"
-        species:
-          type: string
-          example: dog
-        breed:
-          type: string
-          nullable: true
-        color:
-          type: string
-          nullable: true
-        tags:
-          type: array
-          items:
-            type: string
-          example: ["shy"]
-        note:
-          type: string
-          nullable: true
-          description: 텍스트형 기타사항(자유 입력)
-          example: "사람을 잘 따르고 빨간 목줄이 있어요."
-
-    CreateSightingResponse:
-      type: object
-      required: [sighting]
-      properties:
-        sighting:
-          $ref: "#/components/schemas/SightingSummary"
-
-    ListSightingsResponse:
-      type: object
-      required: [meta, sightings]
-      properties:
-        meta:
+        id: { type: string, format: uuid }
+        imageUrl: { type: string }
+        status: { type: string, enum: [open, matched, closed] }
+        location:
           type: object
-          required: [serverTime, lastUpdatedAt, appliedRetentionDays]
           properties:
-            serverTime:
-              type: string
-              format: date-time
-            lastUpdatedAt:
-              type: string
-              format: date-time
-              description: "프론트가 다음 요청의 since로 사용할 서버 기준 시각"
-            appliedRetentionDays:
-              type: integer
-              example: 30
-        sightings:
-          type: array
-          items:
-            $ref: "#/components/schemas/SightingSummary"
-        delta:
+            lat: { type: number }
+            lng: { type: number }
+            address: { type: string }
+        attributes:
           type: object
-          description: since가 있을 때 선택적으로 제공(클라 merge 힌트)
           properties:
-            added:
-              type: array
-              items: { type: string }
-            updated:
-              type: array
-              items: { type: string }
-            removed:
-              type: array
-              items: { type: string }
+            breed: { type: string }
+            color: { type: string }
+            wearing: { type: array, items: { type: string } }
 
-    SightingSummary:
-      type: object
-      required: [id, lat, lng, sightedAt, tags, source, updatedAt]
-      properties:
-        id:
-          type: string
-          example: st_123
-        lat:
-          type: number
-          format: double
-        lng:
-          type: number
-          format: double
-        sightedAt:
-          type: string
-          format: date-time
-        updatedAt:
-          type: string
-          format: date-time
-          description: "델타/merge를 위한 서버 업데이트 시각"
-        thumbUrl:
-          type: string
-          nullable: true
-        species:
-          type: string
-          nullable: true
-        breed:
-          type: string
-          nullable: true
-        color:
-          type: string
-          nullable: true
-        tags:
-          type: array
-          items:
-            type: string
-        note:
-          type: string
-          nullable: true
-          description: 기타사항(텍스트)
-        source:
-          type: string
-          enum: [witness, shelter]
-
-    SightingDetailResponse:
-      type: object
-      required: [sighting]
-      properties:
-        sighting:
-          type: object
-          required: [id, lat, lng, sightedAt, tags, source, createdAt, updatedAt]
-          properties:
-            id: { type: string }
-            lat: { type: number, format: double }
-            lng: { type: number, format: double }
-            sightedAt: { type: string, format: date-time }
-            createdAt: { type: string, format: date-time }
-            updatedAt: { type: string, format: date-time }
-            imageUrl: { type: string, nullable: true }
-            thumbUrl: { type: string, nullable: true }
-            species: { type: string, nullable: true }
-            breed: { type: string, nullable: true }
-            color: { type: string, nullable: true }
-            tags:
-              type: array
-              items: { type: string }
-            note:
-              type: string
-              nullable: true
-              description: 텍스트형 기타사항(자유 입력)
-            source:
-              type: string
-              enum: [witness, shelter]
-
-    CreateLostRequest:
-      type: object
-      required: [name, lostAt, lostLat, lostLng]
-      properties:
-        name: { type: string, example: "방울이" }
-        photoUrl: { type: string, nullable: true }
-        lostAt: { type: string, format: date-time }
-        lostLat: { type: number, format: double }
-        lostLng: { type: number, format: double }
-        status:
-          type: string
-          enum: [searching, found]
-          default: searching
-          description: "유실 등록 상태"
-        species: { type: string, nullable: true }
-        breed: { type: string, nullable: true }
-        color: { type: string, nullable: true }
-        tags:
-          type: array
-          items: { type: string }
-        description:
-          type: string
-          nullable: true
-
-    UpdateLostRequest:
+    MapMarker:
       type: object
       properties:
-        name: { type: string, nullable: true }
-        photoUrl: { type: string, nullable: true }
-        lostAt: { type: string, format: date-time, nullable: true }
-        lostLat: { type: number, format: double, nullable: true }
-        lostLng: { type: number, format: double, nullable: true }
-        status:
-          type: string
-          enum: [searching, found]
-          nullable: true
-        species: { type: string, nullable: true }
-        breed: { type: string, nullable: true }
-        color: { type: string, nullable: true }
-        tags:
-          type: array
-          items: { type: string }
-          nullable: true
-        description:
-          type: string
-          nullable: true
+        id: { type: string }
+        type: { type: string, enum: [lost, sighting] }
+        lat: { type: number }
+        lng: { type: number }
+        status: { type: string }
 
-    ListLostResponse:
+    RecommendationResult:
       type: object
-      required: [lost]
       properties:
-        lost:
-          type: array
-          items: { $ref: "#/components/schemas/LostSummary" }
-
-    LostSummary:
-      type: object
-      required: [id, name, lostAt, lostLat, lostLng, status]
-      properties:
-        id: { type: string, example: "lp_001" }
-        name: { type: string, example: "방울이" }
-        lostAt: { type: string, format: date-time }
-        lostLat: { type: number, format: double }
-        lostLng: { type: number, format: double }
-        status:
-          type: string
-          enum: [searching, found]
-        species: { type: string, nullable: true }
-        breed: { type: string, nullable: true }
-        color: { type: string, nullable: true }
-        tags:
-          type: array
-          items: { type: string }
-
-    LostResponse:
-      type: object
-      required: [lost]
-      properties:
-        lost:
-          allOf:
-            - $ref: "#/components/schemas/LostSummary"
-            - type: object
-              properties:
-                photoUrl: { type: string, nullable: true }
-                description: { type: string, nullable: true }
-                createdAt: { type: string, format: date-time, nullable: true }
-                updatedAt: { type: string, format: date-time, nullable: true }
-
-    RecommendationsResponse:
-      type: object
-      required: [lostId, generatedAt, isFresh, items]
-      properties:
-        lostId:
-          type: string
-          example: lp_001
-        generatedAt:
-          type: string
-          format: date-time
-          description: "추천 결과 생성/캐시 갱신 시각"
-        isFresh:
-          type: boolean
-          description: "서버 캐시 hit 여부(또는 TTL 내 fresh 여부)"
-        items:
-          type: array
-          items:
-            $ref: "#/components/schemas/RecommendationItem"
-        nextCursor:
-          type: string
-          nullable: true
-
-    RecommendationItem:
-      type: object
-      required: [sightingId, score, reasons, distanceMeters, timeDiffMinutes]
-      properties:
-        sightingId:
-          type: string
-          example: st_123
-        score:
-          type: number
-          format: float
-          example: 0.82
-          description: "최종 점수(벡터 유사도 + 시간/거리/태그 가중치 re-rank 결과)"
-        reasons:
-          type: array
-          items:
-            type: string
-          example: ["distance_close", "time_close", "color_match"]
-        distanceMeters:
-          type: integer
-          example: 1200
-        timeDiffMinutes:
-          type: integer
-          example: 90
-        thumbUrl:
-          type: string
-          nullable: true
-
-    UpsertTrailRequest:
-      type: object
-      required: [sightingIds]
-      properties:
-        sightingIds:
-          type: array
-          items: { type: string }
-          description: "선택한 제보 id 목록(순서가 의미 있음)"
-          example: ["st_101", "st_205", "st_330"]
-        clientUpdatedAt:
-          type: string
-          format: date-time
-          nullable: true
-          description: "클라이언트에서 마지막 수정 시각(디버깅/충돌 완화용)"
-
-    TrailResponse:
-      type: object
-      required: [trail]
-      properties:
-        trail:
-          $ref: "#/components/schemas/Trail"
-
-    TrailMutationResponse:
-      type: object
-      required: [lostId, sightingId, action, trailVersion, updatedAt]
-      properties:
-        lostId: { type: string, example: lp_001 }
-        sightingId: { type: string, example: st_123 }
-        action:
-          type: string
-          enum: [added, removed, noop]
-          description: "토글/삭제/멱등 처리 결과"
-        trailVersion:
-          type: integer
-          example: 4
-        updatedAt:
-          type: string
-          format: date-time
-
-    Trail:
-      type: object
-      required: [lostId, updatedAt, version, items]
-      properties:
-        lostId:
-          type: string
-          example: lp_001
-        updatedAt:
-          type: string
-          format: date-time
-        version:
-          type: integer
-          example: 3
-        items:
-          type: array
-          description: "sightedAt 기준 오름차순 정렬(선 연결 순서)"
-          items:
-            $ref: "#/components/schemas/TrailItem"
-
-    TrailItem:
-      type: object
-      required: [sightingId, sightedAt]
-      properties:
-        sightingId:
-          type: string
-          example: st_123
-        sightedAt:
-          type: string
-          format: date-time
-        lat:
-          type: number
-          format: double
-          nullable: true
-        lng:
-          type: number
-          format: double
-          nullable: true
+        sighting: { $ref: '#/components/schemas/SightingResponse' }
+        score: { type: number }
+        matchReasons: { type: array, items: { type: string } }
