@@ -832,7 +832,7 @@ components:
       properties:
         type: { type: string, enum: [cluster, point] }
         id:   { type: string }
-        count:{ type: integer, nullable: true }
+        count: { type: integer, nullable: true }
         lat:  { type: number }
         lng:  { type: number }
       required: [type, id, lat, lng]
