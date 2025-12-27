@@ -1,207 +1,932 @@
 openapi: 3.0.3
 info:
-  title: PinPaw BFF API
-  version: 1.1.0
-  description: PinPaw Service API for Next.js BFF
+  title: PinPaw API
+  version: "1.0.1"
+  description: >
+    PinPaw BFF API (Balanced MVP).
+    - Public: create sighting (anon), map clusters (ETag/304)
+    - Auth: lost posts CRUD, my sightings, map markers (ETag/304), recommendations (cached)
 servers:
-  - url: https://api.pinpaw.com/v1
+  - url: /api/v1
+
+tags:
+  - name: Uploads
+  - name: Sightings
+  - name: LostPosts
+  - name: Map
+  - name: Recommendations
+
 security:
-  - BearerAuth: []
+  - bearerAuth: []
 
 paths:
-  /sightings/upload-url:
+  /uploads/presign:
     post:
-      operationId: createUploadUrl
+      tags: [Uploads]
+      summary: Create presigned upload URLs
+      description: Issues presigned URLs for direct-to-storage uploads.
+      security: []  # Optional auth
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [filename, fileType, fileSize]
-              properties:
-                filename: { type: string }
-                fileType: { type: string }
-                fileSize: { type: integer, maximum: 10485760 }
+              $ref: "#/components/schemas/PresignRequest"
       responses:
-        '200':
+        "200":
+          description: Presign issued
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  uploadUrl: { type: string }
-                  imageUuid: { type: string }
+                $ref: "#/components/schemas/EnvelopePresignResponse"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeError"
+        "429":
+          description: Rate limited
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeError"
 
   /sightings:
     post:
-      operationId: createSighting
+      tags: [Sightings]
+      summary: Create a sighting report
+      description: >
+        Creates a sighting report. Anonymous reports are not linked to an identity.
+        Optional lostPostId can link a sighting to the owner's lost post.
+      security: []  # Optional auth
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/SightingCreateRequest'
+              $ref: "#/components/schemas/SightingCreateRequest"
       responses:
-        '201':
+        "201":
+          description: Created
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SightingResponse'
+                $ref: "#/components/schemas/EnvelopeSightingCreateResponse"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeError"
+        "429":
+          description: Rate limited
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeError"
 
-  /sightings/{id}:
-    delete:
-      operationId: deleteSighting
+  /me/sightings:
+    get:
+      tags: [Sightings]
+      summary: List my sightings (only those posted while authenticated)
+      security:
+        - bearerAuth: []
       parameters:
-        - name: id
-          in: path
-          required: true
-          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
       responses:
-        '204':
-          description: No Content
-    patch:
-      operationId: updateSightingStatus
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeMySightingsResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeError"
+
+  /lost-posts:
+    post:
+      tags: [LostPosts]
+      summary: Create a lost post
+      security:
+        - bearerAuth: []
       parameters:
-        - name: id
-          in: path
-          required: true
-          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                status:
-                  type: string
-                  enum: [open, matched, closed]
+              $ref: "#/components/schemas/LostPostCreateRequest"
       responses:
-        '200':
+        "201":
+          description: Created
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SightingResponse'
+                $ref: "#/components/schemas/EnvelopeLostPostCreateResponse"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeError"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeError"
+
+  /me/lost-posts:
+    get:
+      tags: [LostPosts]
+      summary: List my lost posts
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/LostStatus"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeMyLostPostsResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeError"
+
+  /lost-posts/{lostPostId}:
+    parameters:
+      - $ref: "#/components/parameters/LostPostId"
+    get:
+      tags: [LostPosts]
+      summary: Get lost post detail (owner only)
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeLostPostDetailResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeError"
+        "403":
+          description: Forbidden (not owner)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeError"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeError"
+    patch:
+      tags: [LostPosts]
+      summary: Update lost post (owner only)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LostPostUpdateRequest"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeLostPostUpdateResponse"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeError"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeError"
+        "403":
+          description: Forbidden (not owner)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeError"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeError"
+    delete:
+      tags: [LostPosts]
+      summary: Delete lost post (owner only)
+      security:
+        - bearerAuth: []
+      responses:
+        "204":
+          description: Deleted
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeError"
+        "403":
+          description: Forbidden (not owner)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeError"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeError"
+
+  /public/map/clusters:
+    get:
+      tags: [Map]
+      summary: Public map clusters (bbox + zoom) with ETag/304
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/MinLat"
+        - $ref: "#/components/parameters/MinLng"
+        - $ref: "#/components/parameters/MaxLat"
+        - $ref: "#/components/parameters/MaxLng"
+        - $ref: "#/components/parameters/Zoom"
+        - name: If-None-Match
+          in: header
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK (ETag returned)
+          headers:
+            ETag:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeClustersResponse"
+        "304":
+          description: Not Modified
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeError"
 
   /map/markers:
     get:
-      operationId: getMapMarkers
+      tags: [Map]
+      summary: Auth map markers (bbox + zoom) with ETag / 304
+      security:
+        - bearerAuth: []
       parameters:
-        - name: bbox
-          in: query
-          required: true
-          schema: { type: string }
+        - $ref: "#/components/parameters/MinLat"
+        - $ref: "#/components/parameters/MinLng"
+        - $ref: "#/components/parameters/MaxLat"
+        - $ref: "#/components/parameters/MaxLng"
+        - $ref: "#/components/parameters/Zoom"
         - name: If-None-Match
           in: header
-          schema: { type: string }
+          required: false
+          schema:
+            type: string
       responses:
-        '200':
+        "200":
+          description: OK (ETag returned)
           headers:
-            ETag: { schema: { type: string } }
+            ETag:
+              schema:
+                type: string
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  markers:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/MapMarker'
-        '304':
+                $ref: "#/components/schemas/EnvelopeMarkersResponse"
+        "304":
           description: Not Modified
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeError"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeError"
 
-  /recommend:
+  /recommendations:
     get:
-      operationId: getRecommendations
+      tags: [Recommendations]
+      summary: Get recommendations for my lost post (cached)
+      security:
+        - bearerAuth: []
       parameters:
         - name: lostPostId
           in: query
           required: true
-          schema: { type: string, format: uuid }
+          schema:
+            type: string
+            format: uuid
+        - name: radiusKm
+          in: query
+          required: false
+          schema:
+            type: number
+            default: 8
+            minimum: 0.1
+            maximum: 50
+        - name: days
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 8
+            minimum: 1
+            maximum: 60
+        - name: topK
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 50
       responses:
-        '200':
+        "200":
+          description: OK
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  results:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/RecommendationResult'
-
-  /recommend/feedback:
-    post:
-      operationId: submitRecommendationFeedback
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [lostPostId, sightingId, type]
-              properties:
-                lostPostId: { type: string, format: uuid }
-                sightingId: { type: string, format: uuid }
-                type: { type: string, enum: [positive, negative] }
-                reason: { type: string }
-      responses:
-        '201':
-          description: Created
+                $ref: "#/components/schemas/EnvelopeRecommendationsResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeError"
+        "403":
+          description: Forbidden (lostPost not owned)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeError"
 
 components:
   securitySchemes:
-    BearerAuth:
+    bearerAuth:
       type: http
       scheme: bearer
       bearerFormat: JWT
 
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: >
+        Recommended for POST requests to prevent duplicate creations.
+        Same key should return same result (server retains keys for ~24h).
+      schema:
+        type: string
+        format: uuid
+
+    LostPostId:
+      name: lostPostId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      schema:
+        type: string
+
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        default: 20
+        minimum: 1
+        maximum: 50
+
+    MinLat:
+      name: minLat
+      in: query
+      required: true
+      schema:
+        type: number
+        minimum: -90
+        maximum: 90
+    MinLng:
+      name: minLng
+      in: query
+      required: true
+      schema:
+        type: number
+        minimum: -180
+        maximum: 180
+    MaxLat:
+      name: maxLat
+      in: query
+      required: true
+      schema:
+        type: number
+        minimum: -90
+        maximum: 90
+    MaxLng:
+      name: maxLng
+      in: query
+      required: true
+      schema:
+        type: number
+        minimum: -180
+        maximum: 180
+    Zoom:
+      name: zoom
+      in: query
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 22
+
   schemas:
-    SightingCreateRequest:
+    Meta:
       type: object
-      required: [imageUuid, latitude, longitude, description, discoveredAt]
       properties:
-        imageUuid: { type: string, format: uuid }
-        latitude: { type: number }
-        longitude: { type: number }
-        discoveredAt: { type: string, format: date-time }
-        description: { type: string }
-        breed: { type: string }
-        color: { type: string }
-        wearing: { type: array, items: { type: string } }
+        requestId:
+          type: string
+          format: uuid
+        serverTime:
+          type: string
+          format: date-time
+      required: [requestId, serverTime]
 
-    SightingResponse:
+    ErrorObj:
       type: object
       properties:
-        id: { type: string, format: uuid }
-        imageUrl: { type: string }
-        status: { type: string, enum: [open, matched, closed] }
-        location:
+        code:
+          type: string
+        message:
+          type: string
+        details:
           type: object
-          properties:
-            lat: { type: number }
-            lng: { type: number }
-            address: { type: string }
-        attributes:
-          type: object
-          properties:
-            breed: { type: string }
-            color: { type: string }
-            wearing: { type: array, items: { type: string } }
+          additionalProperties: true
+      required: [code, message]
 
-    MapMarker:
+    EnvelopeBase:
       type: object
       properties:
-        id: { type: string }
-        type: { type: string, enum: [lost, sighting] }
+        success:
+          type: boolean
+        data:
+          nullable: true
+        error:
+          nullable: true
+        meta:
+          $ref: "#/components/schemas/Meta"
+      required: [success, data, error, meta]
+
+    EnvelopeError:
+      allOf:
+        - $ref: "#/components/schemas/EnvelopeBase"
+        - type: object
+          properties:
+            success:
+              type: boolean
+              enum: [false]
+            data:
+              nullable: true
+            error:
+              $ref: "#/components/schemas/ErrorObj"
+
+    # ---- Upload ----
+    PresignFile:
+      type: object
+      properties:
+        contentType:
+          type: string
+          example: image/jpeg
+        sizeBytes:
+          type: integer
+          example: 3456789
+      required: [contentType, sizeBytes]
+
+    PresignRequest:
+      type: object
+      properties:
+        purpose:
+          type: string
+          example: sighting_photo
+        files:
+          type: array
+          items:
+            $ref: "#/components/schemas/PresignFile"
+          minItems: 1
+          maxItems: 3
+      required: [purpose, files]
+
+    PresignUpload:
+      type: object
+      properties:
+        fileKey:
+          type: string
+        uploadUrl:
+          type: string
+        expiresInSec:
+          type: integer
+          example: 600
+      required: [fileKey, uploadUrl, expiresInSec]
+
+    PresignResponseData:
+      type: object
+      properties:
+        uploads:
+          type: array
+          items:
+            $ref: "#/components/schemas/PresignUpload"
+      required: [uploads]
+
+    EnvelopePresignResponse:
+      allOf:
+        - $ref: "#/components/schemas/EnvelopeBase"
+        - type: object
+          properties:
+            success:
+              type: boolean
+              enum: [true]
+            data:
+              $ref: "#/components/schemas/PresignResponseData"
+            error:
+              nullable: true
+
+    # ---- Common Domain ----
+    AuthorType:
+      type: string
+      enum: [anon, user]
+
+    EmbeddingStatus:
+      type: string
+      enum: [pending, ready, failed]
+
+    Location:
+      type: object
+      properties:
         lat: { type: number }
         lng: { type: number }
-        status: { type: string }
+      required: [lat, lng]
 
-    RecommendationResult:
+    Traits:
       type: object
       properties:
-        sighting: { $ref: '#/components/schemas/SightingResponse' }
-        score: { type: number }
-        matchReasons: { type: array, items: { type: string } }
+        color: { type: string, nullable: true }
+        size:  { type: string, nullable: true }
+        state: { type: string, nullable: true }
+
+    # ---- Sighting ----
+    SightingCreateRequest:
+      type: object
+      properties:
+        authorType:
+          $ref: "#/components/schemas/AuthorType"
+        occurredAt:
+          type: string
+          format: date-time
+        location:
+          $ref: "#/components/schemas/Location"
+        photoKeys:
+          type: array
+          items: { type: string }
+          minItems: 1
+          maxItems: 3
+        traits:
+          $ref: "#/components/schemas/Traits"
+        note:
+          type: string
+          nullable: true
+        lostPostId:
+          type: string
+          format: uuid
+          nullable: true
+          description: Optional link to an owner's lost post
+      required: [authorType, occurredAt, location, photoKeys]
+
+    SightingCreateResponseData:
+      type: object
+      properties:
+        sightingId: { type: string, format: uuid }
+        createdAt:  { type: string, format: date-time }
+        embeddingStatus:
+          $ref: "#/components/schemas/EmbeddingStatus"
+      required: [sightingId, createdAt, embeddingStatus]
+
+    EnvelopeSightingCreateResponse:
+      allOf:
+        - $ref: "#/components/schemas/EnvelopeBase"
+        - type: object
+          properties:
+            success: { type: boolean, enum: [true] }
+            data: { $ref: "#/components/schemas/SightingCreateResponseData" }
+            error: { nullable: true }
+
+    MySightingItem:
+      type: object
+      properties:
+        sightingId: { type: string, format: uuid }
+        occurredAt:  { type: string, format: date-time }
+        location:    { $ref: "#/components/schemas/Location" }
+        preview:
+          type: object
+          properties:
+            photoKey: { type: string }
+        traits:      { $ref: "#/components/schemas/Traits" }
+        embeddingStatus:
+          $ref: "#/components/schemas/EmbeddingStatus"
+      required: [sightingId, occurredAt, location, embeddingStatus]
+
+    MySightingsResponseData:
+      type: object
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/MySightingItem" }
+        nextCursor: { type: string, nullable: true }
+      required: [items]
+
+    EnvelopeMySightingsResponse:
+      allOf:
+        - $ref: "#/components/schemas/EnvelopeBase"
+        - type: object
+          properties:
+            success: { type: boolean, enum: [true] }
+            data: { $ref: "#/components/schemas/MySightingsResponseData" }
+            error: { nullable: true }
+
+    # ---- LostPost ----
+    LostStatus:
+      type: string
+      enum: [searching, found, closed]
+
+    LostPostCreateRequest:
+      type: object
+      properties:
+        coverPhotoKey: { type: string }
+        lostAt:        { type: string, format: date-time }
+        lostLocation:  { $ref: "#/components/schemas/Location" }
+        traits:        { $ref: "#/components/schemas/Traits" }
+        status:        { $ref: "#/components/schemas/LostStatus" }
+      required: [coverPhotoKey, lostAt, lostLocation, traits, status]
+
+    LostPostCreateResponseData:
+      type: object
+      properties:
+        lostPostId: { type: string, format: uuid }
+        createdAt:  { type: string, format: date-time }
+        embeddingStatus:
+          $ref: "#/components/schemas/EmbeddingStatus"
+      required: [lostPostId, createdAt, embeddingStatus]
+
+    EnvelopeLostPostCreateResponse:
+      allOf:
+        - $ref: "#/components/schemas/EnvelopeBase"
+        - type: object
+          properties:
+            success: { type: boolean, enum: [true] }
+            data: { $ref: "#/components/schemas/LostPostCreateResponseData" }
+            error: { nullable: true }
+
+    LostPostUpdateRequest:
+      type: object
+      properties:
+        coverPhotoKey: { type: string, nullable: true }
+        lostAt:        { type: string, format: date-time, nullable: true }
+        lostLocation:  { $ref: "#/components/schemas/Location" }
+        traits:        { $ref: "#/components/schemas/Traits" }
+        status:        { $ref: "#/components/schemas/LostStatus" }
+      additionalProperties: false
+
+    LostPostDetail:
+      type: object
+      properties:
+        lostPostId:    { type: string, format: uuid }
+        coverPhotoKey: { type: string }
+        lostAt:        { type: string, format: date-time }
+        lostLocation:  { $ref: "#/components/schemas/Location" }
+        traits:        { $ref: "#/components/schemas/Traits" }
+        status:        { $ref: "#/components/schemas/LostStatus" }
+        embeddingStatus:
+          $ref: "#/components/schemas/EmbeddingStatus"
+      required: [lostPostId, coverPhotoKey, lostAt, lostLocation, traits, status, embeddingStatus]
+
+    LostPostDetailResponseData:
+      type: object
+      properties:
+        item: { $ref: "#/components/schemas/LostPostDetail" }
+      required: [item]
+
+    EnvelopeLostPostDetailResponse:
+      allOf:
+        - $ref: "#/components/schemas/EnvelopeBase"
+        - type: object
+          properties:
+            success: { type: boolean, enum: [true] }
+            data: { $ref: "#/components/schemas/LostPostDetailResponseData" }
+            error: { nullable: true }
+
+    LostPostUpdateResponseData:
+      type: object
+      properties:
+        updatedAt: { type: string, format: date-time }
+      required: [updatedAt]
+
+    EnvelopeLostPostUpdateResponse:
+      allOf:
+        - $ref: "#/components/schemas/EnvelopeBase"
+        - type: object
+          properties:
+            success: { type: boolean, enum: [true] }
+            data: { $ref: "#/components/schemas/LostPostUpdateResponseData" }
+            error: { nullable: true }
+
+    MyLostPostItem:
+      type: object
+      properties:
+        lostPostId:    { type: string, format: uuid }
+        status:        { $ref: "#/components/schemas/LostStatus" }
+        lostAt:        { type: string, format: date-time }
+        lostLocation:  { $ref: "#/components/schemas/Location" }
+        coverPhotoKey: { type: string }
+        embeddingStatus:
+          $ref: "#/components/schemas/EmbeddingStatus"
+      required: [lostPostId, status, lostAt, lostLocation, coverPhotoKey, embeddingStatus]
+
+    MyLostPostsResponseData:
+      type: object
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/MyLostPostItem" }
+        nextCursor: { type: string, nullable: true }
+      required: [items]
+
+    EnvelopeMyLostPostsResponse:
+      allOf:
+        - $ref: "#/components/schemas/EnvelopeBase"
+        - type: object
+          properties:
+            success: { type: boolean, enum: [true] }
+            data: { $ref: "#/components/schemas/MyLostPostsResponseData" }
+            error: { nullable: true }
+
+    # ---- Map ----
+    ClusterItem:
+      type: object
+      properties:
+        type: { type: string, enum: [cluster, point] }
+        id:   { type: string }
+        count:{ type: integer, nullable: true }
+        lat:  { type: number }
+        lng:  { type: number }
+      required: [type, id, lat, lng]
+
+    ClustersResponseData:
+      type: object
+      properties:
+        clusters:
+          type: array
+          items: { $ref: "#/components/schemas/ClusterItem" }
+      required: [clusters]
+
+    EnvelopeClustersResponse:
+      allOf:
+        - $ref: "#/components/schemas/EnvelopeBase"
+        - type: object
+          properties:
+            success: { type: boolean, enum: [true] }
+            data: { $ref: "#/components/schemas/ClustersResponseData" }
+            error: { nullable: true }
+
+    MarkerItem:
+      type: object
+      properties:
+        sightingId: { type: string, format: uuid }
+        occurredAt: { type: string, format: date-time }
+        location:   { $ref: "#/components/schemas/Location" }
+        preview:
+          type: object
+          properties:
+            photoKey: { type: string }
+        traits:     { $ref: "#/components/schemas/Traits" }
+        note:       { type: string, nullable: true }
+        embeddingStatus:
+          $ref: "#/components/schemas/EmbeddingStatus"
+      required: [sightingId, occurredAt, location, embeddingStatus]
+
+    MarkersResponseData:
+      type: object
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/MarkerItem" }
+      required: [items]
+
+    EnvelopeMarkersResponse:
+      allOf:
+        - $ref: "#/components/schemas/EnvelopeBase"
+        - type: object
+          properties:
+            success: { type: boolean, enum: [true] }
+            data: { $ref: "#/components/schemas/MarkersResponseData" }
+            error: { nullable: true }
+
+    # ---- Recommendations ----
+    RecommendationStatus:
+      type: string
+      enum: [ready, pending]
+
+    RecommendationItem:
+      type: object
+      properties:
+        sightingId: { type: string, format: uuid }
+        score:      { type: number, minimum: 0, maximum: 1 }
+        distanceKm: { type: number, minimum: 0 }
+        occurredAt: { type: string, format: date-time }
+        location:   { $ref: "#/components/schemas/Location" }
+        preview:
+          type: object
+          properties:
+            photoKey: { type: string }
+      required: [sightingId, score, occurredAt, location]
+
+    RecommendationsResponseData:
+      type: object
+      properties:
+        lostPostId:   { type: string, format: uuid }
+        radiusKm:     { type: number, default: 8 }
+        days:         { type: integer, default: 8 }
+        topK:         { type: integer, default: 20 }
+        isCached:     { type: boolean }
+        calculatedAt: { type: string, format: date-time, nullable: true }
+        expiresAt:    { type: string, format: date-time, nullable: true }
+        status:       { $ref: "#/components/schemas/RecommendationStatus" }
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/RecommendationItem" }
+      required: [lostPostId, radiusKm, days, topK, isCached, status, items]
+
+    EnvelopeRecommendationsResponse:
+      allOf:
+        - $ref: "#/components/schemas/EnvelopeBase"
+        - type: object
+          properties:
+            success: { type: boolean, enum: [true] }
+            data: { $ref: "#/components/schemas/RecommendationsResponseData" }
+            error: { nullable: true }
